@@ -56,6 +56,80 @@ global_variable bool32 GlobalRunning;
 global_variable win32_offscreen_buffer GlobalBackBuffer;
 global_variable LPDIRECTSOUNDBUFFER GlobalSecondaryBuffer;
 
+
+internal debug_read_file_result
+DEBUGPlatformReadEntireFileIntoMemory(char *Filename)
+{
+   debug_read_file_result Result = {};
+   HANDLE FileHandle = CreateFileA(Filename, GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, 0, 0);
+   if(FileHandle != INVALID_HANDLE_VALUE)
+   {
+      LARGE_INTEGER FileSize;
+      if(GetFileSizeEx(FileHandle, &FileSize))
+      {
+         uint32 FileSize32 = SafeTruncateUint64ToUint32(FileSize.QuadPart);
+         Result.Contents = VirtualAlloc(0, FileSize32, MEM_RESERVE|MEM_COMMIT, PAGE_READWRITE);
+         if(Result.Contents)
+         {
+            DWORD BytesRead;
+            if(ReadFile(FileHandle, Result.Contents, FileSize32, &BytesRead, 0) &&
+              (FileSize32 == BytesRead))
+            {
+               Result.ContentsSize = FileSize32;
+            }
+            else
+            {
+               DEBUGPlatformFreeFileMemory(Result.Contents);
+               Result.Contents = 0;
+            }
+         }
+         else
+         {
+         }
+      }
+      else
+      {
+      }
+      CloseHandle(FileHandle);
+   }
+   else
+   {
+   }
+   return Result;
+
+}
+
+internal void 
+DEBUGPlatformFreeFileMemory(void *Memory)
+{
+   if(Memory)
+   {
+      VirtualFree(Memory, 0, MEM_RELEASE);
+   }
+}
+internal bool32 
+DEBUGPlatformWriteEntireFileIntoMemory(char *Filename, uint32 MemorySize, void *Memory)
+{
+   bool32 Result = false;
+   HANDLE FileHandle = CreateFileA(Filename, GENERIC_WRITE, 0, 0, CREATE_ALWAYS, 0, 0);
+   if(FileHandle != INVALID_HANDLE_VALUE)
+   {
+      DWORD BytesWritten;
+      if(WriteFile(FileHandle, Memory, MemorySize, &BytesWritten, 0))
+      {
+         Result = (MemorySize == BytesWritten);
+      }
+      else
+      {
+      }
+      CloseHandle(FileHandle);
+   }
+   else
+   {
+   }
+   return Result;
+}
+
 internal void
 Win32LoadXInput()
 {
@@ -157,10 +231,10 @@ Win32GetWindowDimension(HWND Window)
 {
    win32_window_dimension Result;
 
-   RECT ClientRect;
-   GetClientRect(Window, &ClientRect);
-   Result.Width = ClientRect.right - ClientRect.left;
-   Result.Height = ClientRect.bottom - ClientRect.top;
+	RECT ClientRect;
+	GetClientRect(Window, &ClientRect);
+	Result.Width = ClientRect.right - ClientRect.left;
+	Result.Height = ClientRect.bottom - ClientRect.top;
 
    return Result;
 
@@ -171,7 +245,7 @@ Win32ResizeDIBSection(win32_offscreen_buffer *Buffer, int Width, int Height)
 {
     if(Buffer->Memory)
     {
-       VirtualFree(Buffer->Memory, 0, MEM_RELEASE);
+		 VirtualFree(Buffer->Memory, 0, MEM_RELEASE);
     }
 
     Buffer->Width = Width;
@@ -192,18 +266,16 @@ Win32ResizeDIBSection(win32_offscreen_buffer *Buffer, int Width, int Height)
 
 internal void
 Win32DisplayBufferInWindow(win32_offscreen_buffer *Buffer,
-                           HDC DeviceContext,
-                           int WindowWidth, int WindowHeight,
+                 		      HDC DeviceContext,
+									int WindowWidth, int WindowHeight,
                            int X, int Y, int Width, int Height)
 {
     StretchDIBits(DeviceContext,
-                  0, 0, WindowWidth, WindowHeight,
-                  0, 0, Buffer->Width, Buffer->Height,
-                  Buffer->Memory,
-                  &Buffer->Info,
-                  DIB_RGB_COLORS, SRCCOPY);
-
-
+						0, 0, WindowWidth, WindowHeight,
+						0, 0, Buffer->Width, Buffer->Height,
+						Buffer->Memory,
+						&Buffer->Info,
+						DIB_RGB_COLORS, SRCCOPY);
 }
 
 LRESULT CALLBACK
@@ -218,17 +290,17 @@ Win32MainWindowMessageCallback(HWND   Window,
     {
         case WM_CLOSE:
         {
-            GlobalRunning = false;
+           GlobalRunning = false;
         } break;
 
         case WM_DESTROY:
         {
-            GlobalRunning = false;
+			  GlobalRunning = false;
         } break;
 
         case WM_ACTIVATEAPP:
         {
-            OutputDebugStringA("WM_ACTIVATEAPP\n");
+			  OutputDebugStringA("WM_ACTIVATEAPP\n");
         } break;
 
         case WM_SYSKEYDOWN:
@@ -236,9 +308,9 @@ Win32MainWindowMessageCallback(HWND   Window,
         case WM_KEYDOWN:
         case WM_KEYUP:
         {
-           uint32 VCode = WParam;
-           bool32 WasDown = ((LParam & (1 << 30)) != 0);
-           bool32 IsDown = ((LParam & (1 << 31)) == 0);
+			  uint32 VCode = WParam;
+			  bool32 WasDown = ((LParam & (1 << 30)) != 0);
+			  bool32 IsDown = ((LParam & (1 << 31)) == 0);
 
            if(WasDown != IsDown)
            {
@@ -474,7 +546,7 @@ WinMain(HINSTANCE Instance,
 #else
             LPVOID BaseAddress = 0;
 #endif
-            game_memory GameMemory;
+            game_memory GameMemory = {};
             GameMemory.PermanentStorageSize = Megabytes(64);
             GameMemory.TransientStorageSize = Gigabytes(4);
 
