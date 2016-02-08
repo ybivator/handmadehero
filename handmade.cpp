@@ -35,8 +35,8 @@ RenderWeirdGradient(game_offscreen_buffer *Buffer, int XOffset, int YOffset)
            X < Buffer->Width;
            ++X)
        {
-          uint8 Blue = (X + XOffset);
-          uint8 Green = (Y + YOffset);
+          uint8 Blue = (uint8)(X + XOffset);
+          uint8 Green = (uint8)(Y + YOffset);
 
           *Pixel++ = ((Green << 8) | Blue);
        }
@@ -73,7 +73,7 @@ game_sound_output_buffer *SoundBuffer)
 
    if(Input0->IsAnalog)
    {
-      GameState->BlueOffset += (int)4.0f * (Input0->EndX);
+      GameState->BlueOffset += (int)(4.0f * Input0->EndX);
       GameState->ToneHz = 256 + (int)(128.0f * (Input0->EndY));
    }
    else

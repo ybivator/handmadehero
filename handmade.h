@@ -19,7 +19,7 @@ SafeTruncateUint64ToUint32(uint64 Value)
 {
    Assert(Value <= 0xFFFFFFFF);
    uint32 Result = (uint32)Value;
-   return Value;
+   return Result;
 }
 
 #if HANDMADE_INTERNAL
