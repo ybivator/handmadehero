@@ -23,7 +23,7 @@ GameOutputSound(game_sound_output_buffer *SoundBuffer, int ToneHz)
     
 
 internal void
-RenderWeirdGradient(game_offscreen_buffer *Buffer, int XOffset, int YOffset)
+RenderWeirdGradient(game_offscreen_buffer *Buffer, int BlueOffset, int GreenOffset)
 {
     uint8 *Row = (uint8 *)Buffer->Memory;
     for(int Y = 0;
@@ -35,8 +35,8 @@ RenderWeirdGradient(game_offscreen_buffer *Buffer, int XOffset, int YOffset)
            X < Buffer->Width;
            ++X)
        {
-          uint8 Blue = (uint8)(X + XOffset);
-          uint8 Green = (uint8)(Y + YOffset);
+          uint8 Blue = (uint8)(X + BlueOffset);
+          uint8 Green = (uint8)(Y + GreenOffset);
 
           *Pixel++ = ((Green << 8) | Blue);
        }
@@ -49,6 +49,8 @@ GameUpdateAndRender(game_memory *Memory, game_input *Input, game_offscreen_buffe
 game_sound_output_buffer *SoundBuffer)
 {
 
+   Assert((&Input->Controllers[0].Terminator - &Input->Controllers[0].Buttons[0]) ==
+         (ArrayCount(Input->Controllers[0].Buttons)));
    Assert(sizeof(game_state) <= Memory->PermanentStorageSize);
 
    game_state *GameState = (game_state *)Memory->PermanentStorage;
@@ -69,20 +71,33 @@ game_sound_output_buffer *SoundBuffer)
       Memory->IsInitialized = true;
    }
 
-   game_controller_input *Input0 = &Input->Controllers[0];
 
-   if(Input0->IsAnalog)
+   for(int ControllerIndex = 0;
+       ControllerIndex < ArrayCount(Input->Controllers);
+       ++ControllerIndex)
    {
-      GameState->BlueOffset += (int)(4.0f * Input0->EndX);
-      GameState->ToneHz = 256 + (int)(128.0f * (Input0->EndY));
-   }
-   else
-   {
-   }
+      game_controller_input *Controller = GetController(Input, ControllerIndex);
+      if(Controller->IsAnalog)
+      {
+         GameState->BlueOffset += (int)(4.0f * Controller->StickAvarageX);
+         GameState->ToneHz = 256 + (int)(128.0f * (Controller->StickAvarageY));
+      }
+      else
+      {
+         if(Controller->MoveLeft.EndedDown)
+         {
+            GameState->BlueOffset -= 1;
+         }
+         if(Controller->MoveRight.EndedDown)
+         {
+            GameState->BlueOffset += 1;
+         }
+      }
 
-   if(Input0->Down.EndedDown)
-   {
-      GameState->GreenOffset += 1;
+      if(Controller->ActionDown.EndedDown)
+      {
+         GameState->GreenOffset += 1;
+      }
    }
 
    GameOutputSound(SoundBuffer, GameState->ToneHz);
