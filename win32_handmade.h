@@ -29,6 +29,7 @@ struct win32_sound_output
 
 struct win32_debug_time_marker
 {
+   DWORD FrameBoundaryByte;
    DWORD PlayCursor;
    DWORD WriteCursor;
 };

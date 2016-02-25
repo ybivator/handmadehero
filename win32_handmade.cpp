@@ -597,10 +597,17 @@ Win32DebugSyncDisplay(win32_offscreen_buffer *BackBuffer, win32_debug_time_marke
    real32 C = (real32)(BackBuffer->Width - 2*PadX) / (real32)SoundOutput->SecondaryBufferSize;
    uint32 PlayColor = 0xFFFFFFFF;
    uint32 WriteColor = 0xFFFF0000;
+   uint32 FrameColor = 0xFF000000;
    Win32DrawSoundBufferMarker(BackBuffer, SoundOutput, C, PadX, Top, Bottom, Marker->PlayCursor,
                               PlayColor);
    Win32DrawSoundBufferMarker(BackBuffer, SoundOutput, C, PadX, Top, Bottom, Marker->WriteCursor, 
                               WriteColor);
+
+   Top = PadY;
+   Bottom += 3 * LineHeight;
+
+   Win32DrawSoundBufferMarker(BackBuffer, SoundOutput, C, PadX, Top, Bottom, Marker->FrameBoundaryByte, 
+                              FrameColor);
 }
 
 int CALLBACK 
@@ -851,6 +858,21 @@ WinMain(HINSTANCE Instance,
                    DWORD WriteCursor;
                    if(GlobalSecondaryBuffer->GetCurrentPosition(&PlayCursor, &WriteCursor) == DS_OK)
                    {
+                      LARGE_INTEGER PlayCursorTime = Win32GetWallClock();
+                      real32 TimeFromStartToPlayCursor = Win32GetSecondsElapsed(LastCounter, PlayCursorTime);
+                      real32 PlayCursorFrameTimeDiff = TargetSecondsPerFrame - TimeFromStartToPlayCursor;
+                      DWORD BytesFromPlayToBoundary = ((DWORD)(PlayCursorFrameTimeDiff *
+                                                               (real32)SoundOutput.SamplesPerSecond *
+                                                               (real32)SoundOutput.BytesPerSample) %
+                                                               SoundOutput.SecondaryBufferSize);
+
+                      DWORD FrameBoundaryByte = ((PlayCursor + BytesFromPlayToBoundary) %
+                                                 SoundOutput.SecondaryBufferSize);
+
+                      DWORD FrameBytes = (DWORD)((SoundOutput.SamplesPerSecond * SoundOutput.BytesPerSample) / 
+                                                 GameUpdateHz);
+
+
                       if(!SoundIsValid)
                       {
                          SoundOutput.RunningSampleIndex = WriteCursor / SoundOutput.BytesPerSample;
@@ -871,13 +893,15 @@ WinMain(HINSTANCE Instance,
                          BytesToWrite = TargetCursor - ByteToLock;
                       }
 
+                      Marker.FrameBoundaryByte = FrameBoundaryByte;
                       Marker.PlayCursor = PlayCursor;
                       Marker.WriteCursor = WriteCursor;
 
                       char TextBuffer[256];
                       sprintf_s(TextBuffer, sizeof(TextBuffer),
-                                "PC:%u WC:%u BTL:%u TC:%u BTW:%u\n",
-                                PlayCursor, WriteCursor, ByteToLock, TargetCursor, BytesToWrite);
+                                "PC:%u WC:%u BTL:%u TC:%u BTW:%u FrameBoundaryByte:%u FrameBytes:%u\n",
+                                PlayCursor, WriteCursor, ByteToLock, TargetCursor, BytesToWrite,
+                                FrameBoundaryByte, FrameBytes);
                       OutputDebugStringA(TextBuffer);
                    }
                    else
