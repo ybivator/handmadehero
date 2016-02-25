@@ -112,8 +112,8 @@ struct game_memory
 };
 
 
-internal void GameUpdateAndRender(game_memory *Memory, game_input *Input, game_offscreen_buffer *Buffer,
-                                  game_sound_output_buffer *SoundBuffer);
+internal void GameUpdateAndRender(game_memory *Memory, game_input *Input, game_offscreen_buffer *Buffer);
+internal void GameGetSoundSamples(game_memory *Memory, game_sound_output_buffer *SoundBuffer);
 
 struct game_state
 {
