@@ -3,8 +3,8 @@
 internal void
 GameOutputSound(game_sound_output_buffer *SoundBuffer, int ToneHz)
 {
-    local_persist real32 tSine;
-    int16 ToneVolume = 3000;
+//    local_persist real32 tSine;
+    int16 ToneVolume = 6000;
     int WavePeriod = SoundBuffer->SamplesPerSecond / ToneHz;
 
     int16 *SampleOut = SoundBuffer->Samples;
@@ -12,12 +12,12 @@ GameOutputSound(game_sound_output_buffer *SoundBuffer, int ToneHz)
         SampleIndex < SoundBuffer->SampleCount;
         ++SampleIndex)
     {
-       real32 SineValue = sinf(tSine);
+       real32 SineValue = sinf(SoundBuffer->tSine);
        int16 SampleValue = (int16)(SineValue * ToneVolume);
        *SampleOut++ = SampleValue;
        *SampleOut++ = SampleValue; 
        
-       tSine += 2.0f*Pi32*1.0f/(real32)WavePeriod;
+       SoundBuffer->tSine += 2.0f*Pi32*1.0f/(real32)WavePeriod;
     }
 }
     
@@ -65,7 +65,7 @@ GameUpdateAndRender(game_memory *Memory, game_input *Input, game_offscreen_buffe
       }
       
 
-      GameState->ToneHz = 256;
+      GameState->ToneHz = 512;
 
       Memory->IsInitialized = true;
    }
@@ -79,7 +79,7 @@ GameUpdateAndRender(game_memory *Memory, game_input *Input, game_offscreen_buffe
       if(Controller->IsAnalog)
       {
          GameState->BlueOffset += (int)(4.0f * Controller->StickAvarageX);
-         GameState->ToneHz = 256 + (int)(128.0f * (Controller->StickAvarageY));
+         GameState->ToneHz = 512 + (int)(128.0f * (Controller->StickAvarageY));
       }
       else
       {
@@ -96,6 +96,7 @@ GameUpdateAndRender(game_memory *Memory, game_input *Input, game_offscreen_buffe
       if(Controller->ActionDown.EndedDown)
       {
          GameState->GreenOffset += 1;
+         GameState->ToneHz = 10000;
       }
    }
 
