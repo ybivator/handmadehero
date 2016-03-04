@@ -48,6 +48,8 @@ struct game_sound_output_buffer
     int SampleCount;
     int16 *Samples;
     real32 tSine;
+    uint32 RunningSample;
+    real32 tSine2;
 };
 
 struct game_button_state
