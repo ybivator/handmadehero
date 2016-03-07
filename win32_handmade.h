@@ -24,7 +24,6 @@ struct win32_sound_output
    uint32 RunningSampleIndex;
    int BytesPerSample;
    DWORD SecondaryBufferSize;
-   int LatencySampleCount;
 };
 
 struct win32_debug_time_marker
@@ -38,6 +37,15 @@ struct win32_debug_time_marker
 
    DWORD FlipPlayCursor;
    DWORD FlipWriteCursor;
+};
+
+struct win32_game_code
+{
+   HMODULE GameCodeDLL;
+   FILETIME LastWriteTime;
+   game_update_and_render *UpdateAndRender;
+   game_get_sound_samples *GetSoundSamples;
+   bool32 IsValid;
 };
 
 

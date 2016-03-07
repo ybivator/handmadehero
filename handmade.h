@@ -14,6 +14,29 @@
 
 #define ArrayCount(Array) (sizeof(Array) / sizeof((Array)[0]))
 
+#include <stdint.h>
+#include <math.h>
+
+#define internal static
+#define local_persist static
+#define global_variable static
+
+#define Pi32 3.14159265359f
+
+typedef uint8_t uint8;
+typedef uint16_t uint16;
+typedef uint32_t uint32;
+typedef uint64_t uint64;
+
+typedef int8_t int8;
+typedef int16_t int16;
+typedef int32_t int32;
+typedef int64_t int64;
+typedef int32 bool32;
+
+typedef float real32;
+typedef double real64;
+
 inline uint32
 SafeTruncateUint64ToUint32(uint64 Value)
 {
@@ -28,9 +51,14 @@ struct debug_read_file_result
    uint32 ContentsSize;
    void *Contents;
 };
-internal debug_read_file_result DEBUGPlatformReadEntireFileIntoMemory(char *Filename);
-internal void DEBUGPlatformFreeFileMemory(void *Memory);
-internal bool32 DEBUGPlatformWriteEntireFileIntoMemory(char *Filename, uint32 MemorySize, void *Memory);
+#define DEBUG_READ_FILE(name) debug_read_file_result name(char *Filename)
+typedef DEBUG_READ_FILE(debug_read_file);
+
+#define DEBUG_FREE_FILE(name) void name(void *Memory)
+typedef DEBUG_FREE_FILE(debug_free_file);
+
+#define DEBUG_WRITE_ENTIRE_FILE(name) bool32 name(char *Filename, uint32 MemorySize, void *Memory)
+typedef DEBUG_WRITE_ENTIRE_FILE(debug_write_file);
 #endif
 
 struct game_offscreen_buffer
@@ -112,17 +140,32 @@ struct game_memory
 
    uint64 TransientStorageSize;
    void *TransientStorage;
+
+   debug_read_file *DEBUGPlatformReadEntireFileIntoMemory;
+   debug_free_file *DEBUGPlatformFreeFileMemory;
+   debug_write_file *DEBUGPlatformWriteEntireFileIntoMemory;
 };
 
+#define GAME_UPDATE_AND_RENDER(name) void name(game_memory *Memory,\
+                                               game_input *Input, game_offscreen_buffer *Buffer)
+typedef GAME_UPDATE_AND_RENDER(game_update_and_render);
+GAME_UPDATE_AND_RENDER(GameUpdateAndRenderStub)
+{
+}
 
-internal void GameUpdateAndRender(game_memory *Memory, game_input *Input, game_offscreen_buffer *Buffer);
-internal void GameGetSoundSamples(game_memory *Memory, game_sound_output_buffer *SoundBuffer);
+#define GAME_GET_SOUND_SAMPLES(name) void name(game_memory *Memory, game_sound_output_buffer *SoundBuffer)
+typedef GAME_GET_SOUND_SAMPLES(game_get_sound_samples);
+GAME_GET_SOUND_SAMPLES(GameGetSoundSamplesStub)
+{
+}
 
 struct game_state
 {
    int ToneHz;
    int BlueOffset;
    int GreenOffset;
+
+   real32 tSine;
 };
 
 #endif
