@@ -146,7 +146,20 @@ struct game_memory
    debug_write_file *DEBUGPlatformWriteEntireFileIntoMemory;
 };
 
-#define GAME_UPDATE_AND_RENDER(name) void name(game_memory *Memory,\
+struct game_state
+{
+   int ToneHz;
+   int BlueOffset;
+   int GreenOffset;
+   real32 tSine;
+
+   int PlayerX;
+   int PlayerY;
+   real32 tJump;
+
+};
+
+#define GAME_UPDATE_AND_RENDER(name) void name(game_memory *Memory, \
                                                game_input *Input, game_offscreen_buffer *Buffer)
 typedef GAME_UPDATE_AND_RENDER(game_update_and_render);
 GAME_UPDATE_AND_RENDER(GameUpdateAndRenderStub)
@@ -158,14 +171,5 @@ typedef GAME_GET_SOUND_SAMPLES(game_get_sound_samples);
 GAME_GET_SOUND_SAMPLES(GameGetSoundSamplesStub)
 {
 }
-
-struct game_state
-{
-   int ToneHz;
-   int BlueOffset;
-   int GreenOffset;
-
-   real32 tSine;
-};
 
 #endif

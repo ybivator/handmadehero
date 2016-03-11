@@ -19,43 +19,73 @@ GameOutputSound(game_state *GameState, game_sound_output_buffer *SoundBuffer, in
 
        *SampleOut++ = SampleValue;
        *SampleOut++ = SampleValue; 
-
+#if 0
        GameState->tSine += (2.0f*Pi32*1.0f/(real32)WavePeriod);
        if(GameState->tSine > (2.0f*Pi32))
        {
           GameState->tSine -= (2.0f*Pi32);
        }
+#endif
     }
 }
     
-
 internal void
 RenderWeirdGradient(game_offscreen_buffer *Buffer, int BlueOffset, int GreenOffset)
 {
-    uint8 *Row = (uint8 *)Buffer->Memory;
-    for(int Y = 0;
-        Y < Buffer->Height;
-        ++Y)
-    {
-       uint32 *Pixel = (uint32 *)Row;
-       for(int X = 0;
-           X < Buffer->Width;
-           ++X)
-       {
-          uint8 Blue = (uint8)(X + BlueOffset);
-          uint8 Green = (uint8)(Y + GreenOffset);
+   uint8 *Row = (uint8 *)Buffer->Memory;
+   for(int Y = 0;
+       Y < Buffer->Height;
+       ++Y)
+   {
+      uint32 *Pixel = (uint32 *)Row;
+      for(int X = 0;
+          X < Buffer->Width;
+          ++X)
+      {
+         uint8 Blue = (uint8)(X + BlueOffset);
+         uint8 Green = (uint8)(Y + GreenOffset);
 
-          *Pixel++ = ((Green << 16) | Blue);
-       }
-       Row += Buffer->Pitch;
-    }
+         *Pixel++ = ((Green << 16) | Blue);
+      }
+      Row += Buffer->Pitch;
+   }
+}
+internal void
+RenderPlayer(game_offscreen_buffer *Buffer, int PlayerX, int PlayerY)
+{
+   uint32 Color = 0xFFFFFFFF;
+   uint8 *EndOfBuffer = (uint8 *)Buffer->Memory + 
+           (Buffer->Height * Buffer->Pitch);
+
+   int Top = PlayerY;
+   int Bottom = PlayerY + 10;
+   for(int X = PlayerX;
+       X < PlayerX + 10;
+       ++X)
+   {
+      uint8 *Pixel = ((uint8 *)Buffer->Memory + 
+                      X * Buffer->BytesPerPixel + 
+                      Top*Buffer->Pitch);
+      for(int Y = Top;
+          Y < Bottom;
+          ++Y)
+      {
+         if((Pixel >= Buffer->Memory) &&
+            ((Pixel + 4) <= EndOfBuffer))
+         {
+            *(uint32 *)Pixel = Color;
+         }
+         Pixel += Buffer->Pitch;
+      }
+   }
+
 }
 
 extern "C" GAME_UPDATE_AND_RENDER(GameUpdateAndRender)
 {
 
    Assert((&Input->Controllers[0].Terminator - &Input->Controllers[0].Buttons[0]) ==
-         (ArrayCount(Input->Controllers[0].Buttons)));
+          (ArrayCount(Input->Controllers[0].Buttons)));
    Assert(sizeof(game_state) <= Memory->PermanentStorageSize);
 
    game_state *GameState = (game_state *)Memory->PermanentStorage;
@@ -69,9 +99,11 @@ extern "C" GAME_UPDATE_AND_RENDER(GameUpdateAndRender)
          Memory->DEBUGPlatformWriteEntireFileIntoMemory("test.out", File.ContentsSize, File.Contents);
          Memory->DEBUGPlatformFreeFileMemory(File.Contents);
       }
-      
+
 
       GameState->ToneHz = 512;
+      GameState->PlayerX = 100;
+      GameState->PlayerY = 100;
 
       Memory->IsInitialized = true;
    }
@@ -97,16 +129,23 @@ extern "C" GAME_UPDATE_AND_RENDER(GameUpdateAndRender)
          {
             GameState->BlueOffset += 1;
          }
-      }
 
+      }
+      GameState->PlayerX += (int)(4.0f * Controller->StickAvarageX);
+      GameState->PlayerY -= (int)(4.0f * Controller->StickAvarageY);
+      if(GameState->tJump > 0)
+      {
+         GameState->PlayerY += (int)(10.0f*sinf(0.5f*Pi32*GameState->tJump));
+      }
       if(Controller->ActionDown.EndedDown)
       {
-         GameState->GreenOffset += 1;
-         GameState->ToneHz = 10000;
+         GameState->tJump = 4.0f;
       }
+      GameState->tJump -= 0.033f;
    }
 
    RenderWeirdGradient(Buffer, GameState->BlueOffset, GameState->GreenOffset);
+   RenderPlayer(Buffer, GameState->PlayerX, GameState->PlayerY);
 }
 
 extern "C" GAME_GET_SOUND_SAMPLES(GameGetSoundSamples)
