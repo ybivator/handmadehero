@@ -30,6 +30,7 @@ global_variable x_input_set_state *XInputSetState_ = XInputSetStateStub;
 typedef DIRECT_SOUND_CREATE(direct_sound_create);
 
 global_variable bool32 GlobalRunning;
+global_variable bool32 GlobalPause;
 global_variable win32_offscreen_buffer GlobalBackBuffer;
 global_variable LPDIRECTSOUNDBUFFER GlobalSecondaryBuffer;
 global_variable int64 GlobalPerfCountFrequency;
@@ -123,7 +124,7 @@ DEBUG_READ_FILE(DEBUGPlatformReadEntireFileIntoMemory)
             }
             else
             {
-               DEBUGPlatformFreeFileMemory(Result.Contents);
+               DEBUGPlatformFreeFileMemory(Thread, Result.Contents);
                Result.Contents = 0;
             }
          }
@@ -517,9 +518,11 @@ Win32FillSoundBuffer(win32_sound_output *SoundOutput, DWORD ByteToLock, DWORD By
 internal void
 Win32ProcessKeyboardMessage(game_button_state *NewState, bool32 IsDown)
 {
-   Assert(NewState->EndedDown != IsDown);
-   NewState->EndedDown = IsDown;
-   ++NewState->HalfTransitionCount;
+   if(NewState->EndedDown != IsDown)
+   {
+      NewState->EndedDown = IsDown;
+      ++NewState->HalfTransitionCount;
+   }
 }
 
 internal void
@@ -547,24 +550,41 @@ Win32ProcessXInputStickValue(SHORT Value, SHORT DeadZoneThreshold)
 }
 
 internal void
-Win32GetInputFileLocation(win32_state *State, int SlotIndex, int DestCount, char *Dest)
+Win32GetInputFileLocation(win32_state *State, bool32 Input, int SlotIndex, int DestCount, char *Dest)
 {
-   Assert(SlotIndex == 1);
-   Win32BuildEXEPathFilename(State, "loop_edit.hmi", DestCount, Dest);
+   char Temp[64];
+   wsprintf(Temp, "loop_edit_%d_%s.hmi", SlotIndex, Input ? "input" : "state");
+   Win32BuildEXEPathFilename(State, Temp, DestCount, Dest);
+}
+
+win32_replay_buffer *
+Win32GetReplayBuffer(win32_state *State, int ReplayIndex)
+{
+   Assert(ReplayIndex < ArrayCount(State->ReplayBuffers));
+   win32_replay_buffer *Result = &State->ReplayBuffers[ReplayIndex];
+   return Result;
 }
 
 internal void
 Win32OpenRecordingHandle(win32_state *Win32State, int RecordingIndex)
 {
-   Win32State->RecordingIndex = RecordingIndex;
-   char FileName[WIN32_STATE_FILE_NAME_COUNT];
-   Win32GetInputFileLocation(Win32State, RecordingIndex, sizeof(FileName), FileName);
-   Win32State->RecordingHandle = CreateFileA(FileName, GENERIC_WRITE, 0, 0, CREATE_ALWAYS, 0, 0);
+   win32_replay_buffer *ReplayBuffer = Win32GetReplayBuffer(Win32State, RecordingIndex);
+   if(ReplayBuffer->MemoryMap)
+   {
+      Win32State->RecordingIndex = RecordingIndex;
+      char FileName[WIN32_STATE_FILE_NAME_COUNT];
+      Win32GetInputFileLocation(Win32State, true, RecordingIndex, sizeof(FileName), FileName);
 
-   DWORD BytesToWrite = (DWORD)Win32State->TotalSize;
-   DWORD BytesRecorded;
-   WriteFile(Win32State->RecordingHandle, Win32State->GameMemoryBlock, BytesToWrite,
-             &BytesRecorded, 0);
+      Win32State->RecordingHandle = CreateFileA(FileName, GENERIC_READ | GENERIC_WRITE,
+                                                0, 0, CREATE_ALWAYS, 0, 0);
+#if 0
+      LARGE_INTEGER FiliPosition;
+      FilePosition.QuadPart = Win32State->TotalSize;
+      SetFilePointerEx(Win32State->RecordingHandle, FilePosition, 0, FILE_BEGIN);
+#endif
+
+      CopyMemory(ReplayBuffer->MemoryMap, Win32State->GameMemoryBlock, Win32State->TotalSize);
+   }
 }
 
 internal void
@@ -577,15 +597,23 @@ Win32CloseRecordingHandle(win32_state *Win32State)
 internal void
 Win32OpenPlayingHandle(win32_state *Win32State, int PlayingIndex)
 {
-   Win32State->PlayingIndex = PlayingIndex;
-   char FileName[WIN32_STATE_FILE_NAME_COUNT];
-   Win32GetInputFileLocation(Win32State, PlayingIndex, sizeof(FileName), FileName);
-   Win32State->PlayingHandle = CreateFileA(FileName, GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, 0, 0);
+   win32_replay_buffer *ReplayBuffer = Win32GetReplayBuffer(Win32State, PlayingIndex);
+   if(ReplayBuffer->MemoryMap)
+   {
+      Win32State->PlayingIndex = PlayingIndex;
+      char FileName[WIN32_STATE_FILE_NAME_COUNT];
+      Win32GetInputFileLocation(Win32State, true, PlayingIndex, sizeof(FileName), FileName);
 
-   DWORD BytesToRead = (DWORD)Win32State->TotalSize;
-   DWORD BytesRead;
-   ReadFile(Win32State->PlayingHandle, Win32State->GameMemoryBlock, BytesToRead,
-             &BytesRead, 0);
+      Win32State->PlayingHandle = CreateFileA(FileName, GENERIC_READ,
+                                              0, 0, OPEN_EXISTING, 0, 0);
+#if 0
+      LARGE_INTEGER FiliPosition;
+      FilePosition.QuadPart = Win32State->TotalSize;
+      SetFilePointerEx(Win32State->PlayingHandle, FilePosition, 0, FILE_BEGIN);
+#endif
+
+      CopyMemory(Win32State->GameMemoryBlock, ReplayBuffer->MemoryMap, Win32State->TotalSize);
+   }
 }
 
 internal void
@@ -690,19 +718,33 @@ Win32ProcessPendingMessages(win32_state *Win32State, game_controller_input *Keyb
                      Win32ProcessKeyboardMessage(&KeyboardController->Back, IsDown);
                   }
 #if HANDMADE_INTERNAL
+                  else if(VCode == 'P')
+                  {
+                     if(IsDown)
+                     {
+                        GlobalPause = !GlobalPause;
+                     }
+                  }
                   else if(VCode == 'L')
                   {
                      if(IsDown)
                      {
-                        if(Win32State->RecordingIndex == 0)
+                        if(Win32State->PlayingIndex == 0)
                         {
-                           Win32OpenRecordingHandle(Win32State, 1);
-                           Win32State->RecordingIndex = 1;
+                           if(Win32State->RecordingIndex == 0)
+                           {
+                              Win32OpenRecordingHandle(Win32State, 1);
+                              Win32State->RecordingIndex = 1;
+                           }
+                           else
+                           {
+                              Win32CloseRecordingHandle(Win32State);
+                              Win32OpenPlayingHandle(Win32State, 1);
+                           }
                         }
                         else
                         {
-                           Win32CloseRecordingHandle(Win32State);
-                           Win32OpenPlayingHandle(Win32State, 1);
+                           Win32ClosePlayingHandle(Win32State);
                         }
                      }
                   }
@@ -739,7 +781,7 @@ Win32GetSecondsElapsed(LARGE_INTEGER Start, LARGE_INTEGER End)
                                    (real32)GlobalPerfCountFrequency);
    return Result;
 }
-
+#if 0
 internal void
 Win32DebugDrawVertical(win32_offscreen_buffer *BackBuffer, 
                        int X, int Top, int Bottom, uint32 Color)
@@ -815,6 +857,7 @@ Win32DebugSyncDisplay(win32_offscreen_buffer *BackBuffer, win32_debug_time_marke
    Win32DrawSoundBufferMarker(BackBuffer, SoundOutput, C, PadX, Top, Bottom, Marker->FlipWriteCursor,
                               WriteColor);
 }
+#endif
 
 int CALLBACK 
 WinMain(HINSTANCE Instance,
@@ -852,9 +895,6 @@ WinMain(HINSTANCE Instance,
    WindowClass.hInstance = Instance;
    //    WindowClass.hIcon = ;
    WindowClass.lpszClassName = "HandmadeHeroWindowClass";
-#define MonitorRefreshHz 60
-#define GameUpdateHz (MonitorRefreshHz / 2)
-   real32 TargetSecondsPerFrame = 1.0f / (real32)GameUpdateHz;
 
    if(RegisterClassA(&WindowClass))
    {
@@ -877,10 +917,22 @@ WinMain(HINSTANCE Instance,
       {
          win32_sound_output SoundOutput = {};
 
+         int MonitorRefreshHz = 60;
+         HDC RefreshDC = GetDC(Window);
+         int Win32RefreshRate = GetDeviceCaps(RefreshDC, VREFRESH);
+         ReleaseDC(Window, RefreshDC);
+         if(Win32RefreshRate > 1)
+         {
+            MonitorRefreshHz = Win32RefreshRate;
+         }
+         real32 GameUpdateHz = (MonitorRefreshHz / 2.0f);
+         real32 TargetSecondsPerFrame = 1.0f / (real32)GameUpdateHz;
+
          SoundOutput.SamplesPerSecond = 48000;
          SoundOutput.BytesPerSample = sizeof(int16)*2;
-         SoundOutput.SafetyBytes = ((SoundOutput.SamplesPerSecond * SoundOutput.BytesPerSample) /
-                                    GameUpdateHz / 3);
+         SoundOutput.SafetyBytes = (int)((real32)SoundOutput.SamplesPerSecond *
+                                         (real32)SoundOutput.BytesPerSample /
+                                         GameUpdateHz / 3.0f);
          SoundOutput.SecondaryBufferSize = SoundOutput.SamplesPerSecond*SoundOutput.BytesPerSample;
 
          Win32InitDSound(Window, SoundOutput.SamplesPerSecond, SoundOutput.SecondaryBufferSize);
@@ -919,15 +971,39 @@ WinMain(HINSTANCE Instance,
          uint64 TotalSize = GameMemory.PermanentStorageSize + GameMemory.TransientStorageSize;
          Win32State.TotalSize = TotalSize;
          Win32State.GameMemoryBlock = VirtualAlloc(BaseAddress, (size_t)TotalSize,
-                                              MEM_RESERVE|MEM_COMMIT, PAGE_READWRITE);
+                                                   MEM_RESERVE|MEM_COMMIT, PAGE_READWRITE);
          GameMemory.PermanentStorage = Win32State.GameMemoryBlock;
          GameMemory.TransientStorage = ((uint8 *)GameMemory.PermanentStorage +
                                         GameMemory.PermanentStorageSize);
-         if(!GameMemory.PermanentStorage)
+
+         for(int ReplayIndex = 0;
+             ReplayIndex < ArrayCount(Win32State.ReplayBuffers);
+             ++ReplayIndex)
          {
-            DWORD Code = GetLastError();
-            char ErrorCode[200];
-            sprintf_s(ErrorCode, "Error Code: %d\n", Code);
+            win32_replay_buffer *ReplayBuffer = &Win32State.ReplayBuffers[ReplayIndex];
+            Win32GetInputFileLocation(&Win32State, false, ReplayIndex,
+                                      sizeof(ReplayBuffer->Filename),
+                                      ReplayBuffer->Filename);
+
+            ReplayBuffer->FileHandle = CreateFileA(ReplayBuffer->Filename,
+                                                   GENERIC_READ | GENERIC_WRITE,
+                                                   0, 0, CREATE_ALWAYS, 0, 0);
+
+            LARGE_INTEGER MaxSize;
+            MaxSize.QuadPart = Win32State.TotalSize;
+            DWORD MaxSizeHight = (DWORD)(Win32State.TotalSize >> 32);
+            DWORD MaxSizeLow = (DWORD)(Win32State.TotalSize & 0xFFFFFFFF);
+            ReplayBuffer->MemoryMapHandle = CreateFileMapping(ReplayBuffer->FileHandle, 
+                                                              0,
+                                                              PAGE_READWRITE, 
+                                                              MaxSize.HighPart,
+                                                              MaxSize.LowPart,
+                                                              0);
+
+            ReplayBuffer->MemoryMap = MapViewOfFile(ReplayBuffer->MemoryMapHandle, FILE_MAP_ALL_ACCESS,
+                                                    0,
+                                                    0,
+                                                    Win32State.TotalSize);
          }
 
          if(Samples && GameMemory.PermanentStorage && GameMemory.TransientStorage)
@@ -977,319 +1053,340 @@ WinMain(HINSTANCE Instance,
 
                Win32ProcessPendingMessages(&Win32State, NewKeyboardController);
 
-               DWORD MaxControllerCount = XUSER_MAX_COUNT;
-               if(MaxControllerCount > (ArrayCount(NewInput->Controllers) -1))
+               if(!GlobalPause)
                {
-                  MaxControllerCount = (ArrayCount(NewInput->Controllers) -1);
-               }
 
-               for(DWORD ControllerIndex = 0;
-                   ControllerIndex < MaxControllerCount;
-                   ++ControllerIndex)
-               {
-                  DWORD OurControllerIndex = ControllerIndex + 1;
-                  game_controller_input *OldController = GetController(OldInput, OurControllerIndex);
-                  game_controller_input *NewController = GetController(NewInput, OurControllerIndex);
+                  POINT MouseP;
+                  GetCursorPos(&MouseP);
+                  ScreenToClient(Window, &MouseP);
+                  NewInput->MouseX = MouseP.x;
+                  NewInput->MouseY = MouseP.y;
+                  NewInput->MouseZ = 0;
+                  //                  NewInput->MouseButtons[0] = 
+                  //                  NewInput->MouseButtons[1] = 
+                  //                  NewInput->MouseButtons[2] = 
+                  Win32ProcessKeyboardMessage(&NewInput->MouseButtons[0],
+                                              GetKeyState(VK_LBUTTON) & (1 << 15));
+                  Win32ProcessKeyboardMessage(&NewInput->MouseButtons[1],
+                                              GetKeyState(VK_RBUTTON) & (1 << 15));
+                  Win32ProcessKeyboardMessage(&NewInput->MouseButtons[2],
+                                              GetKeyState(VK_MBUTTON) & (1 << 15));
+                  Win32ProcessKeyboardMessage(&NewInput->MouseButtons[3],
+                                              GetKeyState(VK_XBUTTON1) & (1 << 15));
+                  Win32ProcessKeyboardMessage(&NewInput->MouseButtons[4],
+                                              GetKeyState(VK_XBUTTON2) & (1 << 15));
 
-                  XINPUT_STATE ControllerState;
-                  if(XInputGetState(ControllerIndex, &ControllerState) == ERROR_SUCCESS)
+
+                  DWORD MaxControllerCount = XUSER_MAX_COUNT;
+                  if(MaxControllerCount > (ArrayCount(NewInput->Controllers) -1))
                   {
-                     NewController->IsConnected = true;
-                     NewController->IsAnalog = OldController->IsAnalog;
-                     XINPUT_GAMEPAD *Pad = &ControllerState.Gamepad;
-
-
-                     NewController->StickAvarageX = Win32ProcessXInputStickValue(Pad->sThumbLX,
-                                                                                 XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE);
-                     NewController->StickAvarageY = Win32ProcessXInputStickValue(Pad->sThumbLY,
-                                                                                 XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE);
-                     if((NewController->StickAvarageX != 0.0f) ||
-                        (NewController->StickAvarageY != 0.0f))
-                     {
-                        NewController->IsAnalog = true;
-                     }
-
-                     if(Pad->wButtons & XINPUT_GAMEPAD_DPAD_UP)
-                     {
-                        NewController->StickAvarageY = 1.0f;
-                        NewController->IsAnalog = false;
-                     }
-
-                     if(Pad->wButtons & XINPUT_GAMEPAD_DPAD_DOWN)
-                     {
-                        NewController->StickAvarageY = -1.0f;
-                        NewController->IsAnalog = false;
-                     }
-
-                     if(Pad->wButtons & XINPUT_GAMEPAD_DPAD_LEFT)
-                     {
-                        NewController->StickAvarageX = -1.0f;
-                        NewController->IsAnalog = false;
-                     }
-
-                     if(Pad->wButtons & XINPUT_GAMEPAD_DPAD_RIGHT)
-                     {
-                        NewController->StickAvarageX = 1.0f;
-                        NewController->IsAnalog = false;
-                     }
-
-                     real32 Threshold = 0.5f;
-                     Win32ProcessXInputDigitalButton((NewController->StickAvarageX < -Threshold) ? 1 : 0,
-                                                     &OldController->MoveLeft, 1,
-                                                     &NewController->MoveLeft);
-                     Win32ProcessXInputDigitalButton((NewController->StickAvarageX > Threshold) ? 1 : 0,
-                                                     &OldController->MoveRight, 1,
-                                                     &NewController->MoveRight);
-                     Win32ProcessXInputDigitalButton((NewController->StickAvarageY < -Threshold) ? 1 : 0,
-                                                     &OldController->MoveDown, 1,
-                                                     &NewController->MoveDown);
-                     Win32ProcessXInputDigitalButton((NewController->StickAvarageY > Threshold) ? 1 : 0,
-                                                     &OldController->MoveUp, 1,
-                                                     &NewController->MoveUp);
-
-                     Win32ProcessXInputDigitalButton(Pad->wButtons,
-                                                     &OldController->ActionDown, XINPUT_GAMEPAD_A,
-                                                     &NewController->ActionDown);
-                     Win32ProcessXInputDigitalButton(Pad->wButtons,
-                                                     &OldController->ActionRight, XINPUT_GAMEPAD_B,
-                                                     &NewController->ActionRight);
-                     Win32ProcessXInputDigitalButton(Pad->wButtons,
-                                                     &OldController->ActionLeft, XINPUT_GAMEPAD_X,
-                                                     &NewController->ActionLeft);
-                     Win32ProcessXInputDigitalButton(Pad->wButtons,
-                                                     &OldController->ActionUp, XINPUT_GAMEPAD_Y,
-                                                     &NewController->ActionUp);
-                     Win32ProcessXInputDigitalButton(Pad->wButtons,
-                                                     &OldController->LeftShoulder, XINPUT_GAMEPAD_LEFT_THUMB,
-                                                     &NewController->LeftShoulder);
-                     Win32ProcessXInputDigitalButton(Pad->wButtons,
-                                                     &OldController->RightShoulder, XINPUT_GAMEPAD_RIGHT_THUMB,
-                                                     &NewController->RightShoulder);
-
-                     Win32ProcessXInputDigitalButton(Pad->wButtons,
-                                                     &OldController->RightShoulder, XINPUT_GAMEPAD_START,
-                                                     &NewController->RightShoulder);
-                     Win32ProcessXInputDigitalButton(Pad->wButtons,
-                                                     &OldController->RightShoulder, XINPUT_GAMEPAD_BACK,
-                                                     &NewController->RightShoulder);
+                     MaxControllerCount = (ArrayCount(NewInput->Controllers) -1);
                   }
-                  else
+
+                  for(DWORD ControllerIndex = 0;
+                      ControllerIndex < MaxControllerCount;
+                      ++ControllerIndex)
                   {
-                     // NOTE(maximqa): The controller is not available
-                     NewController->IsConnected = false;
+                     DWORD OurControllerIndex = ControllerIndex + 1;
+                     game_controller_input *OldController = GetController(OldInput, OurControllerIndex);
+                     game_controller_input *NewController = GetController(NewInput, OurControllerIndex);
+
+                     XINPUT_STATE ControllerState;
+                     if(XInputGetState(ControllerIndex, &ControllerState) == ERROR_SUCCESS)
+                     {
+                        NewController->IsConnected = true;
+                        NewController->IsAnalog = OldController->IsAnalog;
+                        XINPUT_GAMEPAD *Pad = &ControllerState.Gamepad;
+
+
+                        NewController->StickAvarageX = Win32ProcessXInputStickValue(Pad->sThumbLX,
+                                                                                    XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE);
+                        NewController->StickAvarageY = Win32ProcessXInputStickValue(Pad->sThumbLY,
+                                                                                    XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE);
+                        if((NewController->StickAvarageX != 0.0f) ||
+                           (NewController->StickAvarageY != 0.0f))
+                        {
+                           NewController->IsAnalog = true;
+                        }
+
+                        if(Pad->wButtons & XINPUT_GAMEPAD_DPAD_UP)
+                        {
+                           NewController->StickAvarageY = 1.0f;
+                           NewController->IsAnalog = false;
+                        }
+
+                        if(Pad->wButtons & XINPUT_GAMEPAD_DPAD_DOWN)
+                        {
+                           NewController->StickAvarageY = -1.0f;
+                           NewController->IsAnalog = false;
+                        }
+
+                        if(Pad->wButtons & XINPUT_GAMEPAD_DPAD_LEFT)
+                        {
+                           NewController->StickAvarageX = -1.0f;
+                           NewController->IsAnalog = false;
+                        }
+
+                        if(Pad->wButtons & XINPUT_GAMEPAD_DPAD_RIGHT)
+                        {
+                           NewController->StickAvarageX = 1.0f;
+                           NewController->IsAnalog = false;
+                        }
+
+                        real32 Threshold = 0.5f;
+                        Win32ProcessXInputDigitalButton((NewController->StickAvarageX < -Threshold) ? 1 : 0,
+                                                        &OldController->MoveLeft, 1,
+                                                        &NewController->MoveLeft);
+                        Win32ProcessXInputDigitalButton((NewController->StickAvarageX > Threshold) ? 1 : 0,
+                                                        &OldController->MoveRight, 1,
+                                                        &NewController->MoveRight);
+                        Win32ProcessXInputDigitalButton((NewController->StickAvarageY < -Threshold) ? 1 : 0,
+                                                        &OldController->MoveDown, 1,
+                                                        &NewController->MoveDown);
+                        Win32ProcessXInputDigitalButton((NewController->StickAvarageY > Threshold) ? 1 : 0,
+                                                        &OldController->MoveUp, 1,
+                                                        &NewController->MoveUp);
+
+                        Win32ProcessXInputDigitalButton(Pad->wButtons,
+                                                        &OldController->ActionDown, XINPUT_GAMEPAD_A,
+                                                        &NewController->ActionDown);
+                        Win32ProcessXInputDigitalButton(Pad->wButtons,
+                                                        &OldController->ActionRight, XINPUT_GAMEPAD_B,
+                                                        &NewController->ActionRight);
+                        Win32ProcessXInputDigitalButton(Pad->wButtons,
+                                                        &OldController->ActionLeft, XINPUT_GAMEPAD_X,
+                                                        &NewController->ActionLeft);
+                        Win32ProcessXInputDigitalButton(Pad->wButtons,
+                                                        &OldController->ActionUp, XINPUT_GAMEPAD_Y,
+                                                        &NewController->ActionUp);
+                        Win32ProcessXInputDigitalButton(Pad->wButtons,
+                                                        &OldController->LeftShoulder, XINPUT_GAMEPAD_LEFT_THUMB,
+                                                        &NewController->LeftShoulder);
+                        Win32ProcessXInputDigitalButton(Pad->wButtons,
+                                                        &OldController->RightShoulder, XINPUT_GAMEPAD_RIGHT_THUMB,
+                                                        &NewController->RightShoulder);
+
+                        Win32ProcessXInputDigitalButton(Pad->wButtons,
+                                                        &OldController->RightShoulder, XINPUT_GAMEPAD_START,
+                                                        &NewController->RightShoulder);
+                        Win32ProcessXInputDigitalButton(Pad->wButtons,
+                                                        &OldController->RightShoulder, XINPUT_GAMEPAD_BACK,
+                                                        &NewController->RightShoulder);
+                     }
+                     else
+                     {
+                        // NOTE(maximqa): The controller is not available
+                        NewController->IsConnected = false;
+                     }
                   }
-               }
 
-               game_offscreen_buffer Buffer = {};
-               Buffer.Memory = GlobalBackBuffer.Memory;
-               Buffer.Width = GlobalBackBuffer.Width;
-               Buffer.Height = GlobalBackBuffer.Height;
-               Buffer.Pitch = GlobalBackBuffer.Pitch;
-               Buffer.BytesPerPixel = GlobalBackBuffer.BytesPerPixel;
+                  thread_context Thread = {};
 
-               if(Win32State.RecordingIndex == 1)
-               {
-                  Win32RecordInput(&Win32State, NewInput);
-               }
-               if(Win32State.PlayingIndex == 1)
-               {
-                  Win32PlayInput(&Win32State, NewInput);
-               }
+                  game_offscreen_buffer Buffer = {};
+                  Buffer.Memory = GlobalBackBuffer.Memory;
+                  Buffer.Width = GlobalBackBuffer.Width;
+                  Buffer.Height = GlobalBackBuffer.Height;
+                  Buffer.Pitch = GlobalBackBuffer.Pitch;
+                  Buffer.BytesPerPixel = GlobalBackBuffer.BytesPerPixel;
 
-               if(Game.UpdateAndRender)
-               {
-                  Game.UpdateAndRender(&GameMemory, NewInput, &Buffer);
-               }
+                  if(Win32State.RecordingIndex == 1)
+                  {
+                     Win32RecordInput(&Win32State, NewInput);
+                  }
+                  if(Win32State.PlayingIndex == 1)
+                  {
+                     Win32PlayInput(&Win32State, NewInput);
+                  }
 
-               DWORD PlayCursor;
-               DWORD WriteCursor;
-               if(GlobalSecondaryBuffer->GetCurrentPosition(&PlayCursor, &WriteCursor) == DS_OK)
-               {
-                  LARGE_INTEGER PlayCursorTime = Win32GetWallClock();
-                  real32 TimeFromStartToPlayCursor = Win32GetSecondsElapsed(FlipCounter, PlayCursorTime);
-                  DWORD BytesFromStartToPlayCursor = ((DWORD)(TimeFromStartToPlayCursor *
+                  if(Game.UpdateAndRender)
+                  {
+                     Game.UpdateAndRender(&Thread, &GameMemory, NewInput, &Buffer);
+                  }
+
+                  DWORD PlayCursor;
+                  DWORD WriteCursor;
+                  if(GlobalSecondaryBuffer->GetCurrentPosition(&PlayCursor, &WriteCursor) == DS_OK)
+                  {
+                     LARGE_INTEGER PlayCursorTime = Win32GetWallClock();
+                     real32 TimeFromStartToPlayCursor = Win32GetSecondsElapsed(FlipCounter, PlayCursorTime);
+                     DWORD BytesFromStartToPlayCursor = ((DWORD)(TimeFromStartToPlayCursor *
+                                                                 (real32)SoundOutput.SamplesPerSecond *
+                                                                 (real32)SoundOutput.BytesPerSample) %
+                                                         SoundOutput.SecondaryBufferSize);
+
+                     real32 PlayCursorFrameTimeDiff = TargetSecondsPerFrame - TimeFromStartToPlayCursor;
+
+                     DWORD BytesFromPlayToBoundary = ((DWORD)(PlayCursorFrameTimeDiff *
                                                               (real32)SoundOutput.SamplesPerSecond *
                                                               (real32)SoundOutput.BytesPerSample) %
                                                       SoundOutput.SecondaryBufferSize);
 
-                  real32 PlayCursorFrameTimeDiff = TargetSecondsPerFrame - TimeFromStartToPlayCursor;
+                     DWORD FrameBoundaryByte = ((PlayCursor + BytesFromPlayToBoundary) %
+                                                SoundOutput.SecondaryBufferSize);
 
-                  DWORD BytesFromPlayToBoundary = ((DWORD)(PlayCursorFrameTimeDiff *
-                                                           (real32)SoundOutput.SamplesPerSecond *
-                                                           (real32)SoundOutput.BytesPerSample) %
-                                                   SoundOutput.SecondaryBufferSize);
+                     DWORD FrameBytes = (DWORD)((SoundOutput.SamplesPerSecond * SoundOutput.BytesPerSample) / 
+                                                GameUpdateHz);
+                     DWORD UnwrappedWriteCursor = WriteCursor;
+                     if(PlayCursor > WriteCursor)
+                     {
+                        UnwrappedWriteCursor += SoundOutput.SecondaryBufferSize;
+                     }
 
-                  DWORD FrameBoundaryByte = ((PlayCursor + BytesFromPlayToBoundary) %
+                     if(!SoundIsValid)
+                     {
+                        SoundOutput.RunningSampleIndex = WriteCursor / SoundOutput.BytesPerSample;
+                        SoundIsValid = true;
+                     }
+
+                     DWORD AudioLatencyBytes = 0;
+                     if(WriteCursor < PlayCursor)
+                     {
+                        AudioLatencyBytes = SoundOutput.SecondaryBufferSize + WriteCursor;
+                        AudioLatencyBytes -= PlayCursor;
+                     }
+                     else
+                     {
+                        AudioLatencyBytes = WriteCursor - PlayCursor;
+                     }
+                     bool32 AudioIsLowLatency = (UnwrappedWriteCursor < FrameBoundaryByte);
+#if HANDMADE_INTERNAL
+                     Assert(AudioLatencyBytes < SoundOutput.SecondaryBufferSize);
+#endif
+                     DWORD ByteToLock = ((SoundOutput.RunningSampleIndex * SoundOutput.BytesPerSample) %
+                                         SoundOutput.SecondaryBufferSize);
+                     DWORD TargetCursor = 0;
+                     if(AudioIsLowLatency)
+                     {
+                        TargetCursor = FrameBoundaryByte + FrameBytes;
+                     }
+                     else
+                     {
+                        TargetCursor = WriteCursor + (2 * AudioLatencyBytes);
+                     }
+                     TargetCursor %= SoundOutput.SecondaryBufferSize;
+
+                     DWORD BytesToWrite = 0;
+                     if(ByteToLock > TargetCursor)
+                     {
+                        BytesToWrite = SoundOutput.SecondaryBufferSize - ByteToLock;
+                        BytesToWrite += TargetCursor;
+                     }
+                     else
+                     {
+                        BytesToWrite = TargetCursor - ByteToLock;
+                     }
+#if 0
+                     char TextBuffer[256];
+                     sprintf_s(TextBuffer, sizeof(TextBuffer),
+                               "PC:%u WC:%u BTL:%u TC:%u BTW:%u FrameBoundaryByte:%u FrameBytes:%u\n"
+                               "BytesFromStartToPlayCursor:%u AudioLatencyBytes:%u\n"
+                               "TimeFromStartFrameToPlayCursor:%f\n",
+                               PlayCursor, WriteCursor, ByteToLock, TargetCursor, BytesToWrite,
+                               FrameBoundaryByte, FrameBytes, BytesFromStartToPlayCursor,
+                               AudioLatencyBytes, TimeFromStartToPlayCursor);
+                     OutputDebugStringA(TextBuffer);
+#endif
+
+                     game_sound_output_buffer SoundBuffer = {};
+
+                     SoundBuffer.SamplesPerSecond = SoundOutput.SamplesPerSecond;
+                     SoundBuffer.SampleCount = BytesToWrite / SoundOutput.BytesPerSample;
+                     SoundBuffer.Samples = Samples;
+                     if(Game.GetSoundSamples)
+                     {
+                        Game.GetSoundSamples(&Thread, &GameMemory, &SoundBuffer);
+                     }
+
+                     Win32FillSoundBuffer(&SoundOutput, ByteToLock, BytesToWrite, &SoundBuffer);
+
+                     Marker.ByteToLock = ByteToLock;
+                     Marker.EndBufferByte = ((ByteToLock + BytesToWrite) %
                                              SoundOutput.SecondaryBufferSize);
 
-                  DWORD FrameBytes = (DWORD)((SoundOutput.SamplesPerSecond * SoundOutput.BytesPerSample) / 
-                                             GameUpdateHz);
-                  DWORD UnwrappedWriteCursor = WriteCursor;
-                  if(PlayCursor > WriteCursor)
-                  {
-                     UnwrappedWriteCursor += SoundOutput.SecondaryBufferSize;
-                  }
-
-                  if(!SoundIsValid)
-                  {
-                     SoundOutput.RunningSampleIndex = WriteCursor / SoundOutput.BytesPerSample;
-                     SoundIsValid = true;
-                  }
-
-                  DWORD AudioLatencyBytes = 0;
-                  if(WriteCursor < PlayCursor)
-                  {
-                     AudioLatencyBytes = SoundOutput.SecondaryBufferSize + WriteCursor;
-                     AudioLatencyBytes -= PlayCursor;
-                  }
-                  else
-                  {
-                     AudioLatencyBytes = WriteCursor - PlayCursor;
-                  }
-                  bool32 AudioIsLowLatency = (UnwrappedWriteCursor < FrameBoundaryByte);
-#if HANDMADE_INTERNAL
-                  Assert(AudioLatencyBytes < SoundOutput.SecondaryBufferSize);
-#endif
-                  DWORD ByteToLock = ((SoundOutput.RunningSampleIndex * SoundOutput.BytesPerSample) %
-                                      SoundOutput.SecondaryBufferSize);
-                  DWORD TargetCursor = 0;
-                  if(AudioIsLowLatency)
-                  {
-                     TargetCursor = FrameBoundaryByte + FrameBytes;
-                  }
-                  else
-                  {
-                     TargetCursor = WriteCursor + (2 * AudioLatencyBytes);
-                  }
-                  TargetCursor %= SoundOutput.SecondaryBufferSize;
-
-                  DWORD BytesToWrite = 0;
-                  if(ByteToLock > TargetCursor)
-                  {
-                     BytesToWrite = SoundOutput.SecondaryBufferSize - ByteToLock;
-                     BytesToWrite += TargetCursor;
-                  }
-                  else
-                  {
-                     BytesToWrite = TargetCursor - ByteToLock;
-                  }
-
-                  char TextBuffer[256];
-                  sprintf_s(TextBuffer, sizeof(TextBuffer),
-                            "PC:%u WC:%u BTL:%u TC:%u BTW:%u FrameBoundaryByte:%u FrameBytes:%u\n"
-                            "BytesFromStartToPlayCursor:%u AudioLatencyBytes:%u\n"
-                            "TimeFromStartFrameToPlayCursor:%f\n",
-                            PlayCursor, WriteCursor, ByteToLock, TargetCursor, BytesToWrite,
-                            FrameBoundaryByte, FrameBytes, BytesFromStartToPlayCursor,
-                            AudioLatencyBytes, TimeFromStartToPlayCursor);
-                  OutputDebugStringA(TextBuffer);
-
-                  game_sound_output_buffer SoundBuffer = {};
-
-                  SoundBuffer.SamplesPerSecond = SoundOutput.SamplesPerSecond;
-                  SoundBuffer.SampleCount = BytesToWrite / SoundOutput.BytesPerSample;
-                  SoundBuffer.Samples = Samples;
-                  if(Game.GetSoundSamples)
-                  {
-                     Game.GetSoundSamples(&GameMemory, &SoundBuffer);
-                  }
-
-                  Win32FillSoundBuffer(&SoundOutput, ByteToLock, BytesToWrite, &SoundBuffer);
-
-                  Marker.ByteToLock = ByteToLock;
-                  Marker.EndBufferByte = ((ByteToLock + BytesToWrite) %
-                                          SoundOutput.SecondaryBufferSize);
-
-                  if((FrameBoundaryByte - FrameBytes) > SoundOutput.SecondaryBufferSize)
-                  {
-                     Marker.FrameBeforeBoundary = ((FrameBoundaryByte + FrameBytes) %
-                                                   SoundOutput.SecondaryBufferSize);
-                  }
-                  else
-                  {
-                     Marker.FrameBeforeBoundary = FrameBoundaryByte - FrameBytes;
-                  }
-                  Marker.FrameBoundaryByte = FrameBoundaryByte;
-                  Marker.PlayCursor = PlayCursor;
-                  Marker.WriteCursor = WriteCursor;
-               }
-               else
-               {
-                  SoundIsValid = false;
-               }
-
-
-               LARGE_INTEGER WorkCounter = Win32GetWallClock();
-               real32 WorkSecondsElapsed = Win32GetSecondsElapsed(LastCounter, WorkCounter);
-
-               real32 SecondsElapsedForFrame = WorkSecondsElapsed;
-               if(SecondsElapsedForFrame < TargetSecondsPerFrame)
-               {
-                  if(SleepIsGranular)
-                  {
-                     DWORD SleepMS = (DWORD)(1000.0f * (TargetSecondsPerFrame - SecondsElapsedForFrame));
-                     if(SleepMS > 0)
+                     if((FrameBoundaryByte - FrameBytes) > SoundOutput.SecondaryBufferSize)
                      {
-                        Sleep(SleepMS);
+                        Marker.FrameBeforeBoundary = ((FrameBoundaryByte + FrameBytes) %
+                                                      SoundOutput.SecondaryBufferSize);
+                     }
+                     else
+                     {
+                        Marker.FrameBeforeBoundary = FrameBoundaryByte - FrameBytes;
+                     }
+                     Marker.FrameBoundaryByte = FrameBoundaryByte;
+                     Marker.PlayCursor = PlayCursor;
+                     Marker.WriteCursor = WriteCursor;
+                  }
+                  else
+                  {
+                     SoundIsValid = false;
+                  }
+
+
+                  LARGE_INTEGER WorkCounter = Win32GetWallClock();
+                  real32 WorkSecondsElapsed = Win32GetSecondsElapsed(LastCounter, WorkCounter);
+
+                  real32 SecondsElapsedForFrame = WorkSecondsElapsed;
+                  if(SecondsElapsedForFrame < TargetSecondsPerFrame)
+                  {
+                     if(SleepIsGranular)
+                     {
+                        DWORD SleepMS = (DWORD)(1000.0f * (TargetSecondsPerFrame - SecondsElapsedForFrame));
+                        if(SleepMS > 0)
+                        {
+                           Sleep(SleepMS);
+                        }
+                     }
+                     real32 TestSecondsElapsedForFrame = Win32GetSecondsElapsed(LastCounter, Win32GetWallClock());
+
+                     //                      Assert(TestSecondsElapsedForFrame < TargetSecondsPerFrame);
+                     while(SecondsElapsedForFrame < TargetSecondsPerFrame)
+                     {
+                        SecondsElapsedForFrame = Win32GetSecondsElapsed(LastCounter, Win32GetWallClock());
                      }
                   }
-                  real32 TestSecondsElapsedForFrame = Win32GetSecondsElapsed(LastCounter, Win32GetWallClock());
-
-                  //                      Assert(TestSecondsElapsedForFrame < TargetSecondsPerFrame);
-                  while(SecondsElapsedForFrame < TargetSecondsPerFrame)
+                  else
                   {
-                     SecondsElapsedForFrame = Win32GetSecondsElapsed(LastCounter, Win32GetWallClock());
                   }
-               }
-               else
-               {
-               }
 
-               LARGE_INTEGER EndCounter = Win32GetWallClock();
-               real64 MSPerFrame = 1000.0f * Win32GetSecondsElapsed(LastCounter, EndCounter);
-               LastCounter = EndCounter;
+                  LARGE_INTEGER EndCounter = Win32GetWallClock();
+                  real64 MSPerFrame = 1000.0f * Win32GetSecondsElapsed(LastCounter, EndCounter);
+                  LastCounter = EndCounter;
 
 
-               win32_window_dimension Dimension = Win32GetWindowDimension(Window);
-               DWORD PlayCursor1;
-               DWORD WriteCursor1;
-               if(GlobalSecondaryBuffer->GetCurrentPosition(&PlayCursor1, &WriteCursor1) == DS_OK)
-               {
-                  char TextBuffer[256];
-                  sprintf_s(TextBuffer, sizeof(TextBuffer),
-                            "FlipPlayCursor:%u FlipWriteCursor:%u\n",
-                            PlayCursor1, WriteCursor1);
-                  OutputDebugStringA(TextBuffer);
-                  Marker.FlipPlayCursor = PlayCursor1;
-                  Marker.FlipWriteCursor = WriteCursor1;
-               }
+                  win32_window_dimension Dimension = Win32GetWindowDimension(Window);
+                  DWORD PlayCursor1;
+                  DWORD WriteCursor1;
+                  if(GlobalSecondaryBuffer->GetCurrentPosition(&PlayCursor1, &WriteCursor1) == DS_OK)
+                  {
+                     Marker.FlipPlayCursor = PlayCursor1;
+                     Marker.FlipWriteCursor = WriteCursor1;
+                  }
 
-#if HANDMADE_INTERNAL
-               Win32DebugSyncDisplay(&GlobalBackBuffer, &Marker, &SoundOutput, TargetSecondsPerFrame);
+                  HDC DeviceContext = GetDC(Window);
+                  Win32DisplayBufferInWindow(&GlobalBackBuffer, DeviceContext,
+                                             Dimension.Width, Dimension.Height);
+                  ReleaseDC(Window, DeviceContext);
+                  FlipCounter = Win32GetWallClock();
+
+
+                  game_input *Temp = NewInput;
+                  NewInput = OldInput;
+                  OldInput = Temp;
+
+                  uint64 EndCycleCount = __rdtsc();
+                  uint64 CyclesElapsed = EndCycleCount - LastCycleCount;
+                  LastCycleCount = EndCycleCount;
+#if 0
+                  real64 FPS = 0.0f;
+                  real64 MCPF = (real64)(CyclesElapsed / (1000.0f * 1000.0f));
+                  char FPSBuffer[256];
+                  sprintf_s(FPSBuffer, sizeof(FPSBuffer),
+                            "%.02fms/f, %.02fFPS - %.02fmc/f\n", MSPerFrame, FPS, MCPF);
+                  OutputDebugStringA(FPSBuffer);
 #endif
-               HDC DeviceContext = GetDC(Window);
-               Win32DisplayBufferInWindow(&GlobalBackBuffer, DeviceContext,
-                                          Dimension.Width, Dimension.Height);
-               ReleaseDC(Window, DeviceContext);
-               FlipCounter = Win32GetWallClock();
-
-
-               game_input *Temp = NewInput;
-               NewInput = OldInput;
-               OldInput = Temp;
-
-               uint64 EndCycleCount = __rdtsc();
-               uint64 CyclesElapsed = EndCycleCount - LastCycleCount;
-               LastCycleCount = EndCycleCount;
-
-               real64 FPS = 0.0f;
-               real64 MCPF = (real64)(CyclesElapsed / (1000.0f * 1000.0f));
-               char FPSBuffer[256];
-               sprintf_s(FPSBuffer, sizeof(FPSBuffer),
-                         "%.02fms/f, %.02fFPS - %.02fmc/f\n", MSPerFrame, FPS, MCPF);
-               OutputDebugStringA(FPSBuffer);
-
+               }
             } 
+
          }
          else
          {

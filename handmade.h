@@ -45,19 +45,26 @@ SafeTruncateUint64ToUint32(uint64 Value)
    return Result;
 }
 
+struct thread_context
+{
+   int Placeholder;
+};
+
+
 #if HANDMADE_INTERNAL
 struct debug_read_file_result
 {
    uint32 ContentsSize;
    void *Contents;
 };
-#define DEBUG_READ_FILE(name) debug_read_file_result name(char *Filename)
+#define DEBUG_READ_FILE(name) debug_read_file_result name(thread_context *Thread, char *Filename)
 typedef DEBUG_READ_FILE(debug_read_file);
 
-#define DEBUG_FREE_FILE(name) void name(void *Memory)
+#define DEBUG_FREE_FILE(name) void name(thread_context *Thread, void *Memory)
 typedef DEBUG_FREE_FILE(debug_free_file);
 
-#define DEBUG_WRITE_ENTIRE_FILE(name) bool32 name(char *Filename, uint32 MemorySize, void *Memory)
+#define DEBUG_WRITE_ENTIRE_FILE(name) bool32 name(thread_context *Thread, char *Filename,\
+                                                  uint32 MemorySize, void *Memory)
 typedef DEBUG_WRITE_ENTIRE_FILE(debug_write_file);
 #endif
 
@@ -121,6 +128,9 @@ struct game_controller_input
 
 struct game_input
 {
+   game_button_state MouseButtons[5];
+   int32 MouseX, MouseY, MouseZ;
+
    game_controller_input Controllers[5];
 };
 
@@ -159,11 +169,12 @@ struct game_state
 
 };
 
-#define GAME_UPDATE_AND_RENDER(name) void name(game_memory *Memory, \
+#define GAME_UPDATE_AND_RENDER(name) void name(thread_context *Thread, game_memory *Memory, \
                                                game_input *Input, game_offscreen_buffer *Buffer)
 typedef GAME_UPDATE_AND_RENDER(game_update_and_render);
 
-#define GAME_GET_SOUND_SAMPLES(name) void name(game_memory *Memory, game_sound_output_buffer *SoundBuffer)
+#define GAME_GET_SOUND_SAMPLES(name) void name(thread_context *Thread, game_memory *Memory, \
+                                               game_sound_output_buffer *SoundBuffer)
 typedef GAME_GET_SOUND_SAMPLES(game_get_sound_samples);
 
 #endif
